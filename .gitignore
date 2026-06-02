@@ -1,0 +1,18 @@
+# 实验日志
+logs/
+ex_log/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# config：含 api_key，不提交；仅保留 example
+config/*
+!config/models.example.json
+
+# 系统/编辑器
+.DS_Store
+.idea/
+.vscode/

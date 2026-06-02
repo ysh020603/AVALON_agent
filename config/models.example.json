@@ -1,0 +1,23 @@
+{
+  "_description": "复制为 models.json 并填写真实 api_key。键名为总名字（run_*.sh 中 MODEL_A / MODEL_B）；model_name 为 API 请求参数",
+
+  "kimi-k2.5": {
+    "model_name": "kimi-k2.5",
+    "api_key": "YOUR_API_KEY_HERE",
+    "base_url": "http://your-host:port/v1",
+    "temperature": "0.7",
+    "top_p": "0.8",
+    "max_tokens": "8192",
+    "use_reasoning": false
+  },
+
+  "deepseek-v4-flash": {
+    "model_name": "deepseek-v4-flash",
+    "api_key": "YOUR_API_KEY_HERE",
+    "base_url": "https://api.deepseek.com/v1",
+    "temperature": "0.7",
+    "top_p": "0.8",
+    "max_tokens": "8192",
+    "use_reasoning": false
+  }
+}
