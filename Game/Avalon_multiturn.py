@@ -199,8 +199,12 @@ class Game_Avalon_Multiturn:
         response = agent.act(memory, phase, buffered_obs, context, self.game_condition)
         
         # 此时 memory 已经被 agent.act 更新过了（包含 user prompt 和 assistant response）
-        # 返回 response 和 除最新的 assistant 回复之外的 history (用于日志记录 input_msg)
-        return response, memory[:-1]
+        # SummaryMemory Agent 通过 last_input_messages 暴露实际发送给 LLM 的上下文
+        if hasattr(agent, "last_input_messages") and agent.last_input_messages:
+            input_msg = list(agent.last_input_messages)
+        else:
+            input_msg = memory[:-1]
+        return response, input_msg
 
     def _consume_identity_belief_snapshot(self):
         """
@@ -293,6 +297,54 @@ class Game_Avalon_Multiturn:
                     f.write("-" * 50 + "\n")
         
         print(f"\n[System] Game log saved to {target_path}")
+
+        self._save_agent_summary_logs(target_path, time_folder)
+
+    def _save_agent_summary_logs(self, target_path: str, game_id: str):
+        summary_dir = os.path.join(target_path, "summary_agents")
+        for agent in self.agents:
+            if hasattr(agent, "save_summary_log"):
+                agent.save_summary_log(summary_dir, game_id=game_id)
+
+    def _build_turn_objective_info(self, turn_log: Dict) -> str:
+        lines = []
+        q = turn_log.get("quest_config", {})
+        lines.append(f"* Quest size: {q.get('team_size', '?')} players")
+
+        for attempt in turn_log.get("attempts", []):
+            leader = attempt.get("leader")
+            team = attempt.get("proposed_team", [])
+            lines.append(f"* Team proposed by Player {leader}: {team}")
+
+            if attempt.get("vote_result") == "forced":
+                lines.append("* Voting Result: Forced execution (vote track full, skip voting)")
+            elif "votes" in attempt:
+                approve = [str(v["player"]) for v in attempt["votes"] if v["vote"]]
+                reject = [str(v["player"]) for v in attempt["votes"] if not v["vote"]]
+                result = "Approved" if attempt.get("result") == "approved" else "Rejected"
+                lines.append(
+                    f"* Voting Result: {result} (Approve: {', '.join(approve) or 'none'}; "
+                    f"Reject: {', '.join(reject) or 'none'})"
+                )
+
+        if "mission_result" in turn_log:
+            mr = turn_log["mission_result"]
+            fail_cards = mr.get("fail_cards", 0)
+            outcome = turn_log.get("outcome")
+            if outcome == "evil_point":
+                quest_result = f"Failed ({fail_cards} Fail vote(s))"
+            else:
+                quest_result = f"Succeeded ({fail_cards} Fail vote(s))"
+            lines.append(f"* Quest Result: {quest_result}")
+
+        return "\n".join(lines)
+
+    def _notify_turn_end(self, turn_log: Dict):
+        turn_number = turn_log.get("round", 0)
+        objective_info = self._build_turn_objective_info(turn_log)
+        for agent in self.agents:
+            if hasattr(agent, "finalize_turn"):
+                agent.finalize_turn(turn_number, objective_info)
 
     def run_turn(self):
         self.round += 1
@@ -557,6 +609,8 @@ class Game_Avalon_Multiturn:
             "player_actions": condition_player_actions
         }
         # ================================================
+
+        self._notify_turn_end(turn_log)
 
     def run_game(self):
         self._broadcast(f"--- Avalon Start ---")

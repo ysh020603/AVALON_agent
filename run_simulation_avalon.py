@@ -19,6 +19,14 @@ parser.add_argument("--log_tag", type=str, default="", help="Tag for log folder 
 # 游戏参数
 parser.add_argument("--player_num", type=int, default=5, choices=[5, 6, 7, 8, 9, 10], help="Number of players")
 
+# Agent 类型参数
+parser.add_argument("--good_agent_type", type=str, default="Standard",
+                    choices=["Standard", "SummaryMemory"], help="Agent type for Good faction")
+parser.add_argument("--evil_agent_type", type=str, default="Standard",
+                    choices=["Standard", "SummaryMemory"], help="Agent type for Evil faction")
+parser.add_argument("--assign_a_to", type=str, default="good", choices=["good", "evil"],
+                    help="Which side model_a plays: good or evil (for eval scripts)")
+
 # 模型 A 参数
 parser.add_argument("--model_a_name", type=str, required=True)
 parser.add_argument("--model_a_key", type=str, required=True)
@@ -130,6 +138,7 @@ sys.path.append(current_dir)
 try:
     from Tool.callopenai import api_call_format
     from Agents.Agent import Agent
+    from Agents.AgentSummaryMemory import AgentSummaryMemory
     from Game.Avalon_multiturn import Game_Avalon_Multiturn
 except ImportError as e:
     print("Error importing game modules. Please run this script from the root of the project structure.")
@@ -192,7 +201,12 @@ def log_experiment(info_dict):
     
     print(f"[Worker {WORKER_ID}] Log saved: {filename}")
 
-def setup_agents(roles_list, pos_config, neg_config):
+AGENT_CLASS_MAP = {
+    "Standard": Agent,
+    "SummaryMemory": AgentSummaryMemory,
+}
+
+def setup_agents(roles_list, pos_config, neg_config, good_agent_type="Standard", evil_agent_type="Standard"):
     agents = []
     ids = [i for i in range(1, len(roles_list)+1)]
     
@@ -207,16 +221,22 @@ def setup_agents(roles_list, pos_config, neg_config):
         if role in pos_roles:
             config = pos_config
             side = "Positive"
+            agent_cls = AGENT_CLASS_MAP.get(good_agent_type, Agent)
+            agent_type_label = good_agent_type
         elif role in neg_roles:
             config = neg_config
             side = "Negative"
+            agent_cls = AGENT_CLASS_MAP.get(evil_agent_type, Agent)
+            agent_type_label = evil_agent_type
         else:
             config = pos_config 
             side = "Neutral"
+            agent_cls = AGENT_CLASS_MAP.get(good_agent_type, Agent)
+            agent_type_label = good_agent_type
             
-        agent = Agent(pid, role, config.copy(), api_call_format)
+        agent = agent_cls(pid, role, config.copy(), api_call_format)
         agents.append(agent)
-        assigned_configs[f"P{pid}_{role}"] = f"{config.get('name', 'Unknown')} ({side})"
+        assigned_configs[f"P{pid}_{role}"] = f"{config.get('name', 'Unknown')} ({side}, {agent_type_label})"
         
     return agents, assigned_configs
 
@@ -224,21 +244,33 @@ def setup_agents(roles_list, pos_config, neg_config):
 
 def run_simulation():
     ensure_log_dir()
-    
+
     swap_point = TOTAL_ROUNDS // 2
+
+    if args.assign_a_to == "good":
+        good_config, evil_config = CONFIG_MODEL_A, CONFIG_MODEL_B
+    else:
+        good_config, evil_config = CONFIG_MODEL_B, CONFIG_MODEL_A
     
     for i in range(TOTAL_ROUNDS):
         print(f"\n>>> [Worker {WORKER_ID}] Round {i+1}/{TOTAL_ROUNDS} <<<")
         
-        # 1. 确定模型阵营
-        if i < swap_point:
+        # 1. 确定模型阵营（eval 模式下 assign_a_to 固定；常规模式在中点交换）
+        if TOTAL_ROUNDS > 1 and i >= swap_point:
+            model_pos = CONFIG_MODEL_B
+            model_neg = CONFIG_MODEL_A
+            setup_desc = f"Run {swap_point+1}-{TOTAL_ROUNDS}: {model_pos['name']} (Pos) vs {model_neg['name']} (Neg)"
+        elif TOTAL_ROUNDS > 1:
             model_pos = CONFIG_MODEL_A
             model_neg = CONFIG_MODEL_B
             setup_desc = f"Run 1-{swap_point}: {model_pos['name']} (Pos) vs {model_neg['name']} (Neg)"
         else:
-            model_pos = CONFIG_MODEL_B
-            model_neg = CONFIG_MODEL_A
-            setup_desc = f"Run {swap_point+1}-{TOTAL_ROUNDS}: {model_pos['name']} (Pos) vs {model_neg['name']} (Neg)"
+            model_pos = good_config
+            model_neg = evil_config
+            setup_desc = (
+                f"Single game: Good={model_pos['name']} ({args.good_agent_type}) vs "
+                f"Evil={model_neg['name']} ({args.evil_agent_type})"
+            )
             
         print(f"[Setup] {setup_desc}")
 
@@ -251,7 +283,11 @@ def run_simulation():
             break
         
         # 3. 初始化 Agents
-        agents, agent_log_info = setup_agents(roles_list, model_pos, model_neg)
+        agents, agent_log_info = setup_agents(
+            roles_list, model_pos, model_neg,
+            good_agent_type=args.good_agent_type,
+            evil_agent_type=args.evil_agent_type,
+        )
         
         # 4. 初始化游戏
         try:
@@ -277,6 +313,8 @@ def run_simulation():
                 "model_setup_desc": setup_desc,
                 "model_positive": model_pos['name'],
                 "model_negative": model_neg['name'],
+                "good_agent_type": args.good_agent_type,
+                "evil_agent_type": args.evil_agent_type,
                 "model_a_config": CONFIG_MODEL_A['inference_config'],
                 "model_b_config": CONFIG_MODEL_B['inference_config'],
                 "agent_assignments": agent_log_info,
